@@ -13,6 +13,7 @@ InstanceUriPrefix = namedtuple('InstanceUriPrefix', 'zone_name project_id')
 
 GOOGLE_API_NUM_RETRIES = 5
 
+
 def _get_error_reason(http_error):
     """
     Helper function to get an error reason out of the googleapiclient's HttpError object

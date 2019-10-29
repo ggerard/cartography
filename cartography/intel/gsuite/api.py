@@ -1,6 +1,7 @@
 import logging
 
 from googleapiclient.discovery import HttpError
+
 from cartography.util import run_cleanup_job
 
 logger = logging.getLogger(__name__)
@@ -271,8 +272,10 @@ def sync_gsuite_members(groups, session, admin, gsuite_update_tag):
         try:
             resp_objs = get_members_for_group(admin, group['email'])
         except HttpError as e:
-            logger.warning(f"Failed to sync GSuite members for group {group['email']}."
-                           f"Aborting member sync for current group.  Reason: {e}.")
+            logger.warning(
+                f"Failed to sync GSuite members for group {group['email']}."
+                f"Aborting member sync for current group.  Reason: {e}.",
+            )
             resp_objs = []
 
         if resp_objs:
