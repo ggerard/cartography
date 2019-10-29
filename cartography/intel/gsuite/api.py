@@ -1,10 +1,12 @@
 import logging
 
-from cartography.intel.helper.google_request import GoogleRetryException
-from cartography.intel.helper.google_request import repeat_request
+from googleapiclient.discovery import HttpError
 from cartography.util import run_cleanup_job
 
 logger = logging.getLogger(__name__)
+
+
+GOOGLE_API_NUM_RETRIES = 5
 
 
 def get_all_groups(admin):
@@ -18,11 +20,30 @@ def get_all_groups(admin):
     See https://googleapis.github.io/google-api-python-client/docs/epy/googleapiclient.discovery-module.html#build.
     :return: List of Google groups in domain
     """
-    return repeat_request(
-        req=admin.groups().list,
-        req_args={'customer': 'my_customer', 'maxResults': 200, 'orderBy': 'email'},
-        req_next=admin.groups().list_next,
-    )
+    request = admin.groups().list(customer='my_customer', maxResults=20, orderBy='email')
+    response_objects = []
+    count = 0
+    while request is not None:
+        resp = request.execute(num_retries=GOOGLE_API_NUM_RETRIES)
+        response_objects.append(resp)
+        request = admin.groups().list_next(request, resp)
+        if count > 1:
+            break
+        count += 1
+    return response_objects
+
+
+def transform_groups(response_objects):
+    """  Strips list of API response objects to return list of group objects only
+
+    :param response_objects:
+    :return: list of dictionary objects as defined in /docs/schema/gsuite.md
+    """
+    groups = []
+    for response_object in response_objects:
+        for group in response_object['groups']:
+            groups.append(group)
+    return groups
 
 
 def transform_api_objects(response_objects, key):
@@ -41,11 +62,11 @@ def transform_api_objects(response_objects, key):
     :param key: where the core objects live
     :return: list of dictionary objects as defined in /docs/schema/gsuite.md
     """
-    groups = []
+    objects = []
     for response_object in response_objects:
-        for group in response_object.get(key, []):
-            groups.append(group)
-    return groups
+        for object in response_object.get(key, []):
+            objects.append(object)
+    return objects
 
 
 def get_members_for_group(admin, group_email):
@@ -55,11 +76,18 @@ def get_members_for_group(admin, group_email):
 
     :return: List of dictionaries representing Users or Groups.
     """
-    return repeat_request(
-        req=admin.members().list,
-        req_args={'groupKey': group_email, 'maxResults': 500},
-        req_next=admin.members().list_next,
+
+    request = admin.members().list(
+        groupKey=group_email,
+        maxResults=500,
     )
+    members = []
+    while request is not None:
+        resp = request.execute(num_retries=GOOGLE_API_NUM_RETRIES)
+        members = members + resp.get('members', [])
+        request = admin.members().list_next(request, resp)
+
+    return members
 
 
 def get_all_users(admin):
@@ -73,11 +101,17 @@ def get_all_users(admin):
     :return: List of Google users in domain
     see https://developers.google.com/admin-sdk/directory/v1/guides/manage-users#get_all_domain_users
     """
-    return repeat_request(
-        req=admin.users().list,
-        req_args={'customer': 'my_customer', 'maxResults': 500, 'orderBy': 'email'},
-        req_next=admin.users().list_next,
-    )
+    request = admin.users().list(customer='my_customer', maxResults=500, orderBy='email')
+    response_objects = []
+    count = 0
+    while request is not None:
+        resp = request.execute(num_retries=GOOGLE_API_NUM_RETRIES)
+        response_objects.append(resp)
+        request = admin.users().list_next(request, resp)
+        if count > 1:
+            break
+        count += 1
+    return response_objects
 
 
 def load_gsuite_groups(session, groups, gsuite_update_tag):
@@ -197,8 +231,8 @@ def sync_gsuite_users(session, admin, gsuite_update_tag, common_job_parameters):
     logger.debug('Syncing GSuite Users')
     try:
         resp_objs = get_all_users(admin)
-    except GoogleRetryException as e:
-        logger.warning(f"Failed to sync GSuite Users.  Reason: {e}")
+    except HttpError as e:
+        logger.warning(f"Failed to sync GSuite Users.  Aborting GSuite users sync.  Reason: {e}")
         resp_objs = []
 
     if resp_objs:
@@ -219,11 +253,10 @@ def sync_gsuite_groups(session, admin, gsuite_update_tag, common_job_parameters)
     :return: Nothing
     """
     logger.debug('Syncing GSuite Groups')
-
     try:
         resp_objs = get_all_groups(admin)
-    except GoogleRetryException as e:
-        logger.warning(f"Failed to sync GSuite Groups.  Reason: {e}")
+    except HttpError as e:
+        logger.warning(f"Failed to sync GSuite Groups.  Aborting GSuite groups sync.  Reason: {e}.")
         resp_objs = []
 
     if resp_objs:
@@ -235,6 +268,13 @@ def sync_gsuite_groups(session, admin, gsuite_update_tag, common_job_parameters)
 
 def sync_gsuite_members(groups, session, admin, gsuite_update_tag):
     for group in groups:
-        resp_objs = get_members_for_group(admin, group['email'])
-        members = transform_api_objects(resp_objs, 'members')
-        load_gsuite_members(session, group, members, gsuite_update_tag)
+        try:
+            resp_objs = get_members_for_group(admin, group['email'])
+        except HttpError as e:
+            logger.warning(f"Failed to sync GSuite members for group {group['email']}."
+                           f"Aborting member sync for current group.  Reason: {e}.")
+            resp_objs = []
+
+        if resp_objs:
+            members = transform_api_objects(resp_objs, 'members')
+            load_gsuite_members(session, group, members, gsuite_update_tag)

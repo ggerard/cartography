@@ -6,13 +6,12 @@ from collections import namedtuple
 
 from googleapiclient.discovery import HttpError
 
-from cartography.intel.helper.google_request import GoogleRetryException
-from cartography.intel.helper.google_request import repeat_request
 from cartography.util import run_cleanup_job
 
 logger = logging.getLogger(__name__)
 InstanceUriPrefix = namedtuple('InstanceUriPrefix', 'zone_name project_id')
 
+GOOGLE_API_NUM_RETRIES = 5
 
 def _get_error_reason(http_error):
     """
@@ -50,7 +49,7 @@ def get_zones_in_project(project_id, compute, max_results=None):
     """
     try:
         req = compute.zones().list(project=project_id, maxResults=max_results)
-        res = req.execute()
+        res = req.execute(num_retries=GOOGLE_API_NUM_RETRIES)
         return res['items']
     except HttpError as e:
         reason = _get_error_reason(e)
@@ -91,18 +90,9 @@ def get_gcp_instance_responses(project_id, zones, compute):
         return []
     response_objects = []
     for zone in zones:
-        try:
-            objects = repeat_request(
-                req=compute.instances().list,
-                req_args={'project': project_id, 'zone': zone['name']},
-                req_next=compute.instances().list_next,
-            )
-            response_objects = response_objects + objects
-        except GoogleRetryException as e:
-            logger.warning(f"Failed to sync compute instances.  Reason: {e}")
-            response_objects = []
-            break
-
+        req = compute.instances().list(project=project_id, zone=zone['name'])
+        res = req.execute(num_retries=GOOGLE_API_NUM_RETRIES)
+        response_objects.append(res)
     return response_objects
 
 
@@ -115,7 +105,7 @@ def get_gcp_subnets(projectid, region, compute):
     :return: Response object containing data on all GCP subnets for a given project
     """
     req = compute.subnetworks().list(project=projectid, region=region)
-    return req.execute()
+    return req.execute(num_retries=GOOGLE_API_NUM_RETRIES)
 
 
 def get_gcp_vpcs(projectid, compute):
@@ -126,7 +116,7 @@ def get_gcp_vpcs(projectid, compute):
     :return: VPC response object
     """
     req = compute.networks().list(project=projectid)
-    return req.execute()
+    return req.execute(num_retries=GOOGLE_API_NUM_RETRIES)
 
 
 def get_gcp_firewall_ingress_rules(project_id, compute):
@@ -137,7 +127,7 @@ def get_gcp_firewall_ingress_rules(project_id, compute):
     :return: Firewall response object
     """
     req = compute.firewalls().list(project=project_id, filter='(direction="INGRESS")')
-    return req.execute()
+    return req.execute(num_retries=GOOGLE_API_NUM_RETRIES)
 
 
 def transform_gcp_instances(response_objects):

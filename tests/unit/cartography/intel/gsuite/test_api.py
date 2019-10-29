@@ -1,49 +1,7 @@
 from unittest import mock
 from unittest.mock import patch
 
-import pytest
-from googleapiclient.discovery import HttpError
-
 from cartography.intel.gsuite import api
-from cartography.intel.helper.google_request import GoogleRetryException
-
-
-def test_repeat_request():
-    req = mock.MagicMock()
-    req_args = {'test': '123'}
-    req_next = mock.MagicMock()
-    raw_req_1 = mock.MagicMock()
-    resp_req_1 = {'users': [1, 2]}
-    raw_req_2 = mock.MagicMock()
-    resp_req_2 = {'users': [3]}
-
-    req.return_value = raw_req_1
-    req_next.side_effect = [raw_req_2, None]
-
-    raw_req_1.execute.return_value = resp_req_1
-    raw_req_2.execute.return_value = resp_req_2
-
-    result = api.repeat_request(req, req_args, req_next, retries=5)
-    expected = [resp_req_1, resp_req_2]
-    assert result == expected
-
-
-def test_repeat_request_failure():
-    # Test that we retry a failed request n-times on HttpError
-    req = mock.MagicMock()
-    req_args = {'test': '123'}
-    req_next = mock.MagicMock()
-    raw_req_1 = mock.MagicMock()
-    resp_req_1 = {'users': [1, 2]}
-
-    req.return_value = raw_req_1
-
-    raw_req_1.execute.return_value = resp_req_1
-    raw_req_1.execute.side_effect = HttpError(mock.Mock(status=503), content=b'Service Unavailable')
-
-    with pytest.raises(GoogleRetryException):
-        api.repeat_request(req, req_args, req_next, retries=3)
-        assert raw_req_1.execute.call_count == 3
 
 
 def test_transform_api_objects():
@@ -63,17 +21,22 @@ def test_transform_api_objects():
     assert result == expected
 
 
-@patch(
-    'cartography.intel.gsuite.api.repeat_request', return_value=[
-        {'users': [{'primaryEmail': 'employee1@test.lyft.com'}, {'primaryEmail': 'employee2@test.lyft.com'}]},
-        {'users': [{'primaryEmail': 'employee3@test.lyft.com'}]},
-    ],
-)
-def test_get_all_users(repeat_requests):
+def test_get_all_users():
     client = mock.MagicMock()
+    raw_request_1 = mock.MagicMock()
+    raw_request_2 = mock.MagicMock()
+
+    user1 = {'primaryEmail': 'employee1@test.lyft.com'}
+    user2 = {'primaryEmail': 'employee2@test.lyft.com'}
+    user3 = {'primaryEmail': 'employee3@test.lyft.com'}
+
+    client.users().list.return_value = raw_request_1
+    client.users().list_next.side_effect = [raw_request_2, None]
+
+    raw_request_1.execute.return_value = {'users': [user1, user2]}
+    raw_request_2.execute.return_value = {'users': [user3]}
+
     result = api.get_all_users(client)
-    api.transform_api_objects(result, 'users')
-    repeat_requests.assert_called_once()
     emails = [user['primaryEmail'] for response_object in result for user in response_object['users']]
 
     expected = [
@@ -84,21 +47,22 @@ def test_get_all_users(repeat_requests):
     assert sorted(emails) == sorted(expected)
 
 
-@patch(
-    'cartography.intel.gsuite.api.repeat_request', return_value=[
-        {'groups': [{'email': 'group1@test.lyft.com'}, {'email': 'group2@test.lyft.com'}]},
-        {'groups': [{'email': 'group3@test.lyft.com'}]},
-    ],
-)
-def test_get_all_groups(repeat_requests):
+def test_get_all_groups():
     client = mock.MagicMock()
+    raw_request_1 = mock.MagicMock()
+    raw_request_2 = mock.MagicMock()
+
+    group1 = {'email': 'group1@test.lyft.com'}
+    group2 = {'email': 'group2@test.lyft.com'}
+    group3 = {'email': 'group3@test.lyft.com'}
+
+    client.groups().list.return_value = raw_request_1
+    client.groups().list_next.side_effect = [raw_request_2, None]
+
+    raw_request_1.execute.return_value = {'groups': [group1, group2]}
+    raw_request_2.execute.return_value = {'groups': [group3]}
+
     result = api.get_all_groups(client)
-    repeat_requests.assert_called_once()
-    repeat_requests.assert_called_with(
-        req=client.groups().list,
-        req_args={'customer': 'my_customer', 'maxResults': 200, 'orderBy': 'email'},
-        req_next=client.groups().list_next,
-    )
     emails = [group['email'] for response_object in result for group in response_object['groups']]
 
     expected = [
