@@ -23,14 +23,10 @@ def get_all_groups(admin):
     """
     request = admin.groups().list(customer='my_customer', maxResults=20, orderBy='email')
     response_objects = []
-    count = 0
     while request is not None:
         resp = request.execute(num_retries=GOOGLE_API_NUM_RETRIES)
         response_objects.append(resp)
         request = admin.groups().list_next(request, resp)
-        if count > 1:
-            break
-        count += 1
     return response_objects
 
 
